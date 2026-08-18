@@ -19,8 +19,14 @@ from commons.constants import OPENAI_API_KEY
 # - Instructions:
 #   - Model must use only information from conversation
 #   - Strictly forbid to answer questions that are not in the conversation or not present in `RAG CONTEXT`
-_SYSTEM_PROMPT = """
-NEED_TO_IMPLEMENT
+_SYSTEM_PROMPT = """You are a helpful assistant that answers questions about a microwave oven, using ONLY the
+information provided in the RAG CONTEXT section of the user's message.
+
+Rules:
+- Base your answer strictly on the RAG CONTEXT provided in the conversation.
+- If the RAG CONTEXT does not contain enough information to answer the USER QUESTION, say that you don't
+  know based on the provided manual. Do not use any outside knowledge.
+- Do not answer questions that are unrelated to the microwave manual or not present in the RAG CONTEXT.
 """
 
 _USER_PROMPT = """##RAG CONTEXT:
@@ -50,7 +56,14 @@ class MicrowaveRAG:
         # - If yes, load the index from disk using FAISS.load_local()
         # - If no, call _create_new_index() to build and save a fresh index
         # - Return the vectorstore
-        raise NotImplementedError
+        print("Setting up vectorstore...")
+        index_path = os.path.join(os.path.dirname(__file__), "microwave_faiss_index")
+        if os.path.exists(index_path):
+            print(f"Loading existing FAISS index from '{index_path}'")
+            return FAISS.load_local(index_path, self.embeddings, allow_dangerous_deserialization=True)
+
+        print("No existing index found, creating a new one...")
+        return self._create_new_index()
 
     def _create_new_index(self) -> VectorStore:
         """
@@ -65,7 +78,20 @@ class MicrowaveRAG:
         # - Create a FAISS vectorstore from chunks and self.embeddings using FAISS.from_documents()
         # - Save the index locally using vectorstore.save_local("microwave_faiss_index")
         # - Return the vectorstore
-        raise NotImplementedError
+        manual_path = os.path.join(os.path.dirname(__file__), "microwave_manual.txt")
+        loader = TextLoader(manual_path)
+        documents = loader.load()
+
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=300,
+            chunk_overlap=50,
+            separators=["\n\n", "\n", "."]
+        )
+        chunks = text_splitter.split_documents(documents)
+
+        vectorstore = FAISS.from_documents(chunks, self.embeddings)
+        vectorstore.save_local(os.path.join(os.path.dirname(__file__), "microwave_faiss_index"))
+        return vectorstore
 
     def retrieve_context(self, query: str, k: int = 4, score=0.3):
         """
@@ -79,7 +105,14 @@ class MicrowaveRAG:
         # - Search the vectorstore using similarity_search_with_relevance_scores() with k and score_threshold parameters
         # - Iterate over results, collect each doc's page_content, and print its relevance score
         # - Return all collected chunks joined with "\n\n" as a single context string
-        raise NotImplementedError
+        results = self.vectorstore.similarity_search_with_relevance_scores(query, k=k, score_threshold=score)
+
+        chunks = []
+        for doc, relevance_score in results:
+            print(f"Relevance score: {relevance_score:.4f}")
+            chunks.append(doc.page_content)
+
+        return "\n\n".join(chunks)
 
     def augment_prompt(self, query: str, context: str):
         """
@@ -94,7 +127,9 @@ class MicrowaveRAG:
         # - Format _USER_PROMPT template substituting {context} and {query}
         # - Print the resulting augmented prompt
         # - Return the formatted string
-        raise NotImplementedError
+        augmented_prompt = _USER_PROMPT.format(context=context, query=query)
+        print(augmented_prompt)
+        return augmented_prompt
 
     def generate_answer(self, augmented_prompt: str):
         """
@@ -109,7 +144,10 @@ class MicrowaveRAG:
         # - Invoke self.llm_client with the messages list
         # - Print the response content
         # - Return the response content string
-        raise NotImplementedError
+        messages = [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=augmented_prompt)]
+        response = self.llm_client.invoke(messages)
+        print(response.content)
+        return response.content
 
 
 def main(rag: MicrowaveRAG):
@@ -120,7 +158,16 @@ def main(rag: MicrowaveRAG):
     #   - Step 1 (Retrieval):   call rag.retrieve_context() to fetch relevant chunks
     #   - Step 2 (Augmentation): call rag.augment_prompt() to build the prompt
     #   - Step 3 (Generation):  call rag.generate_answer() to get the LLM answer
-    raise NotImplementedError
+    print("Welcome to the Microwave Manual Assistant! Ask a question or type 'exit' to quit.")
+    while True:
+        query = input("> ").strip()
+        if query.lower() == "exit":
+            print("Goodbye!")
+            break
+
+        context = rag.retrieve_context(query)
+        augmented_prompt = rag.augment_prompt(query, context)
+        rag.generate_answer(augmented_prompt)
 
 
 #TODO:
@@ -128,3 +175,7 @@ def main(rag: MicrowaveRAG):
 # - Create OpenAIEmbeddings with model='text-embedding-3-small' and api_key=OPENAI_API_KEY
 # - Create ChatOpenAI with temperature=0.0, model='gpt-5.2' and api_key=OPENAI_API_KEY
 # - Wrap both in a MicrowaveRAG instance and pass it to main()
+_embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=SecretStr(OPENAI_API_KEY))
+_llm_client = ChatOpenAI(temperature=0.0, model="gpt-5.2", api_key=SecretStr(OPENAI_API_KEY))
+
+main(MicrowaveRAG(embeddings=_embeddings, llm_client=_llm_client))
