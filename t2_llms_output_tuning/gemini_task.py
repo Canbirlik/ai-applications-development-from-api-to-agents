@@ -39,5 +39,13 @@ run(
     print_request=True, # Switch to False if you do not want to see the request in console
     print_only_content=False, # Switch to True if you want to see only content from response
 
-
+    generationConfig={
+        # "temperature": 2.0,  # TODO 1 — try 0.0 vs 2.0 with: "Give me a name for a coffee shop"
+        # "topP": 0.1,  # TODO 2 — try 0.1 vs 0.95 with: "List 5 alternative uses for a paperclip"
+        # "topK": 1,  # TODO 3 — try 1 vs 64 with: "Write a one-sentence story about a robot"
+        # "maxOutputTokens": 50,  # TODO 4 — try 50 vs 2048 with: "Explain quantum computing"
+        # "responseMimeType": "application/json",  # TODO 5 — try with: "List 3 programming languages with their year of creation"
+        # "responseSchema": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "year": {"type": "integer"}}}},  # TODO 5
+        "thinkingConfig": {"thinkingBudget": 5000},  # TODO 7 — try with: "How many r's are in the word strawberry?" (actual API field is "thinkingBudget", not "thinkBudget"/"thinkMode" as in the TODO's suggestion above)
+    },
 )

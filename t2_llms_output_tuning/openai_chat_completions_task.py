@@ -60,5 +60,14 @@ run(
     print_request=True, # Switch to False if you do not want to see the request in console
     print_only_content=False, # Switch to True if you want to see only content from response
 
-
+    # n=3,  # TODO 1 — try: "Give me a name for a coffee shop"
+    # temperature=2.0,  # TODO 2 — try 0.0 vs 2.0 with: "Why white is white?"
+    # top_p=0.9,  # TODO 3 — try 0.1 vs 0.9 with: "List 5 alternative uses for a paperclip"
+    # max_completion_tokens=50,  # TODO 4 — try 50 vs 2048 with: "Explain quantum computing"
+    # stop=["5"],  # TODO 5 — try with: "Count from 1 to 20, comma separated"
+    # response_format={"type": "json_schema", "json_schema": {"name": "languages", "strict": True, "schema": {"type": "object", "properties": {"languages": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "year": {"type": "integer"}}, "required": ["name", "year"], "additionalProperties": False}}}, "required": ["languages"], "additionalProperties": False}}},  # TODO 6 — try with: "List 3 programming languages with their year of creation"
+    # frequency_penalty=1.5,  # TODO 7 — try 0.0 vs 1.5 with: "Write a paragraph about the ocean"
+    # presence_penalty=1.5,  # TODO 8 — try 0.0 vs 1.5 with: "Write a paragraph about the ocean"
+    # seed=42,  # TODO 9 — try with: "Give me a name for a coffee shop" (run twice, compare)
+    reasoning_effort="high",  # TODO 10 — try "low" vs "high" with: "How many r's are in the word strawberry?" (omit/keep temperature at 1.0)
 )

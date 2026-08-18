@@ -34,4 +34,10 @@ run(
     print_request=True, # Switch to False if you do not want to see the request in console
     print_only_content=False, # Switch to True if you want to see only content from response
 
+    # temperature=1.0,  # TODO 1 — try 0.0 vs 1.0 with: "Give me a name for a coffee shop"
+    # top_p=0.9,  # TODO 2 — try 0.1 vs 0.9 with: "List 5 alternative uses for a paperclip"
+    # top_k=1,  # TODO 3 — try 1 vs 50 with: "Write a one-sentence story about a robot"
+    # stop_sequences=["10"],  # TODO 4 — try with: "Count from 1 to 20, comma separated"
+    # output_config={"format":{"type": "json_schema", "schema": {"type": "object", "additionalProperties": False, "properties": {"languages": {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": {"name": {"type": "string"}, "year": {"type": "integer"}},"required": ["name", "year"]}}}}}},  # TODO 5 — try with: "List 3 programming languages with their year of creation"
+    thinking={"type": "enabled", "budget_tokens": 5000}, max_tokens=8000,  # TODO 6 — try with: "How many r's are in the word strawberry?"
 )
