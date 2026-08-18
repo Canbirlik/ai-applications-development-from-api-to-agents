@@ -36,15 +36,32 @@ class CustomAnthropicAIClient(AIClient):
             Claude's API returns content as an array of content blocks.
             The response is printed to stdout before being returned.
         """
-        #TODO:
-        # https://docs.anthropic.com/en/api/messages-examples
-        # - Prepare headers with api key, anthropic version and content type
-        # - Add System prompt
-        # - Execute post request to AI API (use `requests`)
-        # - Parse response
-        # - Print response to console
-        # - Return ASSISTANT message
-        raise NotImplementedError
+        headers = {
+            "x-api-key": self._api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+        max_tokens = kwargs.pop("max_tokens", 1024)
+        request_data = {
+            "model": self._model_name,
+            "max_tokens": max_tokens,
+            "system": self._system_prompt,
+            "messages": [message.to_dict() for message in messages],
+            **kwargs,
+        }
+
+        response = requests.post(url=self._endpoint, headers=headers, json=request_data)
+
+        if response.status_code == 200:
+            data = response.json()
+            blocks = data.get("content", [])
+            content = "".join(block.get("text", "") for block in blocks if block.get("type") == "text")
+            if not content:
+                raise ValueError("No content blocks have been present in the response")
+            print(content)
+            return Message(Role.ASSISTANT, content)
+        else:
+            raise Exception(f"HTTP {response.status_code}: {response.text}")
 
     async def stream_response(self, messages: list[Message], **kwargs) -> Message:
         """
@@ -66,14 +83,43 @@ class CustomAnthropicAIClient(AIClient):
             Stops processing when 'message_stop' event is received.
             Each delta is printed to stdout as it arrives.
         """
-        #TODO:
-        # https://docs.anthropic.com/en/docs/build-with-claude/streaming
-        # - Prepare headers with api key, anthropic version and content type
-        # - Add System prompt
-        # - Execute post request to AI API (use `aihttp`)
-        # - Handle stream with chunks
-        # - Parse response
-        # - Print chunks to console
-        # - Return ASSISTANT message
-        raise NotImplementedError
+        headers = {
+            "x-api-key": self._api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+        max_tokens = kwargs.pop("max_tokens", 1024)
+        request_data = {
+            "model": self._model_name,
+            "max_tokens": max_tokens,
+            "system": self._system_prompt,
+            "messages": [message.to_dict() for message in messages],
+            "stream": True,
+            **kwargs,
+        }
+
+        content = ""
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url=self._endpoint, headers=headers, json=request_data) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"HTTP {response.status}: {error_text}")
+
+                async for line in response.content:
+                    decoded_line = line.decode("utf-8").strip()
+                    if not decoded_line.startswith("data: "):
+                        continue
+
+                    event = json.loads(decoded_line[len("data: "):])
+                    if event.get("type") == "content_block_delta":
+                        delta = event.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            text = delta.get("text", "")
+                            print(text, end="", flush=True)
+                            content += text
+                    elif event.get("type") == "message_stop":
+                        break
+        print()
+
+        return Message(Role.ASSISTANT, content)
 
