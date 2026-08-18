@@ -1,5 +1,6 @@
 import base64
 from datetime import datetime
+from pathlib import Path
 
 import requests
 
@@ -34,3 +35,27 @@ from commons.constants import OPENAI_API_KEY, OPENAI_HOST
 #   - Use /v1/images/edits endpoint
 #   - The request must be 'multipart/form-data' (NOT json) — pass the image as a file and the prompt/model as form fields
 #   - The edited image will be returned in base64 format
+
+logo_path = Path(__file__).parent / "logo.png"
+
+with open(logo_path, "rb") as image_file:
+    response = requests.post(
+        url=f"{OPENAI_HOST}/v1/images/edits",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        files={"image": image_file},
+        data={
+            "model": "gpt-image-2",
+            "prompt": "Add magical sparkles and a glowing mystical aura around the logo"
+        }
+    )
+
+if response.status_code != 200:
+    raise Exception(f"HTTP {response.status_code}: {response.text}")
+
+image_base64 = response.json()["data"][0]["b64_json"]
+output_path = f"{Path(__file__).parent}/logo_edited_{datetime.now():%Y%m%d_%H%M%S}.png"
+
+with open(output_path, "wb") as f:
+    f.write(base64.b64decode(image_base64))
+
+print(f"Image saved to {output_path}")
