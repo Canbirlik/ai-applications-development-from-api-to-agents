@@ -1,10 +1,13 @@
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
+from langchain_core.vectorstores import VectorStore
 from langchain_openai import OpenAIEmbeddings
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageParam
+from pydantic import SecretStr
 
 from commons.constants import OPENAI_API_KEY
 from t6_grounding.user_service_client import UserServiceClient
@@ -14,13 +17,26 @@ from t6_grounding.user_service_client import UserServiceClient
 #   - The user message contains two sections: RAG CONTEXT and USER QUESTION
 #   - Answer ONLY based on the provided RAG CONTEXT and conversation history
 #   - If no relevant information exists in RAG CONTEXT, state that the question cannot be answered
-SYSTEM_PROMPT = None
+SYSTEM_PROMPT = """You are a RAG-powered assistant. The user message is structured in two sections:
+- RAG CONTEXT: user data retrieved via similarity search for the current question
+- USER QUESTION: the actual question asked by the user
+
+Rules:
+- Answer ONLY based on the information provided in the RAG CONTEXT and the conversation history.
+- If the RAG CONTEXT does not contain relevant information, state clearly that the question cannot be
+  answered based on the available data.
+"""
 
 #TODO:
 # Define USER_PROMPT template with two placeholders:
 #   - {context} - the retrieved user data
 #   - {query}   - the user's question
-USER_PROMPT = None
+USER_PROMPT = """##RAG CONTEXT:
+{context}
+
+
+##USER QUESTION:
+{query}"""
 
 
 def format_user_document(user: dict[str, Any]) -> str:
@@ -29,14 +45,19 @@ def format_user_document(user: dict[str, Any]) -> str:
     # - For each key-value pair in the user dict, add an indented "  key: value\n" line
     # - Add a blank line at the end
     # - Return the formatted string
-    raise NotImplementedError
+    document = "User:\n"
+    for key, value in user.items():
+        document += f"  {key}: {value}\n"
+    document += "\n"
+
+    return document
 
 
 class UserRAG:
     def __init__(self, embeddings: OpenAIEmbeddings):
         self.embeddings = embeddings
         self._llm_client = OpenAI(api_key=OPENAI_API_KEY)
-        self.vectorstore = None
+        self.vectorstore: VectorStore | None = None
 
     async def __aenter__(self):
         #TODO:
@@ -49,7 +70,17 @@ class UserRAG:
         #   and assign the result to self.vectorstore
         # - Print "✅ Vectorstore is ready."
         # - Return self
-        raise NotImplementedError
+        print("🔎 Loading all users...")
+        users = UserServiceClient().get_all_users()
+
+        print(f"Formatting {len(users)} user documents...")
+        documents = [Document(page_content=format_user_document(user)) for user in users]
+
+        print(f"↗️ Creating embeddings and vectorstore for {len(documents)} documents...")
+        self.vectorstore = await self._create_vectorstore_with_batching(documents, batch_size=100)
+
+        print("✅ Vectorstore is ready.")
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
@@ -64,7 +95,24 @@ class UserRAG:
         #   - Otherwise, call final_vectorstore.merge_from(batch_vectorstore) to combine them
         # - If final_vectorstore is still None after all batches, raise Exception("All batches failed to process")
         # - Return the final merged vectorstore
-        raise NotImplementedError
+        batches = [documents[i:i + batch_size] for i in range(0, len(documents), batch_size)]
+
+        coroutines = [FAISS.afrom_documents(batch, self.embeddings) for batch in batches]
+        batch_results = await asyncio.gather(*coroutines, return_exceptions=True)
+
+        final_vectorstore = None
+        for batch_vectorstore in batch_results:
+            if isinstance(batch_vectorstore, BaseException):
+                continue
+            if final_vectorstore is None:
+                final_vectorstore = batch_vectorstore
+            else:
+                final_vectorstore.merge_from(batch_vectorstore)
+
+        if final_vectorstore is None:
+            raise Exception("All batches failed to process")
+
+        return final_vectorstore
 
     async def retrieve_context(self, query: str, k: int = 10, score: float = 0.1) -> str:
         print("Retrieving context...")
@@ -75,25 +123,45 @@ class UserRAG:
         #   - Print f"Retrieved (Score: {relevance_score:.3f}): {doc.page_content}"
         # - Print a separator line of 100 "=" characters followed by "\n"
         # - Return all context_parts joined with "\n\n"
-        raise NotImplementedError
+        assert self.vectorstore is not None, "Vectorstore is not initialized, use 'async with UserRAG(...)'"
+        results = self.vectorstore.similarity_search_with_relevance_scores(query, k=k, score_threshold=score)
+
+        context_parts = []
+        for doc, relevance_score in results:
+            context_parts.append(doc.page_content)
+            print(f"Retrieved (Score: {relevance_score:.3f}): {doc.page_content}")
+
+        print("=" * 100 + "\n")
+        return "\n\n".join(context_parts)
 
     def augment_prompt(self, query: str, context: str) -> str:
         #TODO:
         # - Return USER_PROMPT formatted with context and query
-        raise NotImplementedError
+        return USER_PROMPT.format(context=context, query=query)
 
     def generate_answer(self, augmented_prompt: str) -> str:
         #TODO:
         # - Build a messages list with SYSTEM_PROMPT as system and augmented_prompt as user
         # - Call self._llm_client.chat.completions.create with model='gpt-4o-mini', temperature=0.0
         # - Return the response content string (default to "" if None)
-        raise NotImplementedError
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": augmented_prompt},
+        ]
+
+        completion = self._llm_client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0.0,
+            messages=cast(list[ChatCompletionMessageParam], messages),
+        )
+
+        return completion.choices[0].message.content or ""
 
 
 async def main():
     embeddings = OpenAIEmbeddings(
         model='text-embedding-3-small',
-        api_key=OPENAI_API_KEY,
+        api_key=SecretStr(OPENAI_API_KEY),
         dimensions=384,
     )
 
@@ -110,7 +178,10 @@ async def main():
             # - Call await rag.retrieve_context(user_question) and store in context
             # - Call rag.augment_prompt(user_question, context) and store in augmented_prompt
             # - Call rag.generate_answer(augmented_prompt) and print the answer
-            raise NotImplementedError
+            context = await rag.retrieve_context(user_question)
+            augmented_prompt = rag.augment_prompt(user_question, context)
+            answer = rag.generate_answer(augmented_prompt)
+            print(f"\nAnswer: {answer}\n")
 
 
 asyncio.run(main())
