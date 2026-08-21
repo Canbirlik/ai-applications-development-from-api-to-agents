@@ -30,7 +30,41 @@ async def main():
     #    - if user_input.lower() == 'exit': break
     #    - append Message(role=Role.USER, content=user_input) to `messages`
     #    - call `await agent.get_response(messages)` and append the returned `ai_message` to `messages`
-    raise NotImplementedError()
+    async with HttpMCPClient(mcp_server_url="http://localhost:8005/mcp") as mcp_client:
+        resources: list[Resource] = await mcp_client.get_resources()
+        print("\n📁 Available Resources:")
+        for resource in resources:
+            print(f"  - {resource.uri}: {resource.name}")
+
+        tools = await mcp_client.get_tools()
+        print("\n🔧 Available Tools:")
+        for tool in tools:
+            print(f"  - {tool['function']['name']}: {tool['function']['description']}")
+
+        agent = AgentMCPFundamentals(
+            api_key=OPENAI_API_KEY,
+            model="gpt-5.2",
+            tools=tools,
+            mcp_client=mcp_client,
+        )
+
+        messages = [Message(role=Role.SYSTEM, content=SYSTEM_PROMPT)]
+
+        prompts: list[Prompt] = await mcp_client.get_prompts()
+        print("\n📝 Available Prompts:")
+        for prompt in prompts:
+            print(f"  - {prompt.name}: {prompt.description}")
+
+        while True:
+            user_input = input("\n> ").strip()
+
+            if user_input.lower() == 'exit':
+                break
+
+            messages.append(Message(role=Role.USER, content=user_input))
+
+            ai_message = await agent.get_response(messages)
+            messages.append(ai_message)
 
 
 if __name__ == "__main__":

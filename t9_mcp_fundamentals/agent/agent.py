@@ -84,4 +84,16 @@ class AgentMCPFundamentals:
         # 2. Get tool name and tool arguments (arguments is a JSON, don't forget about that)
         # 3. Wrap into try/except block and call mcp_client tool call. If succeed then add tool message (don't forget
         #    about tool call id), otherwise add tool message with error message (it kind of fallback strategy).
-        raise NotImplementedError()
+        for tool_call in ai_message.tool_calls or []:
+            tool_call_id = tool_call["id"]
+            function_name = tool_call["function"]["name"]
+            arguments = json.loads(tool_call["function"]["arguments"])
+
+            try:
+                result = await self.mcp_client.call_tool(function_name, arguments)
+            except Exception as e:
+                result = f"Error calling tool '{function_name}': {e}"
+
+            messages.append(
+                Message(role=Role.TOOL, name=function_name, tool_call_id=tool_call_id, content=result)
+            )
