@@ -7,7 +7,7 @@ from commons.models.role import Role
 @dataclass
 class Message:
     role: Role
-    content: str
+    content: str | None
     tool_call_id: str | None = None
     name: str| None = None
     tool_calls: list[dict[str, Any]] | None = None

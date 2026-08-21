@@ -5,15 +5,20 @@ from t8_agent.task.tools.users.base import BaseUserServiceTool
 
 class SearchUsersTool(BaseUserServiceTool):
 
+    # The mock User Service ignores search filters server-side and can return
+    # nearly its entire (auto-growing) dataset, which would blow up the LLM
+    # request if forwarded as-is.
+    MAX_RESULT_CHARS = 4000
+
     @property
     def name(self) -> str:
         #TODO: Provide tool name as `search_users`
-        raise NotImplementedError()
+        return "search_users"
 
     @property
     def description(self) -> str:
         #TODO: Provide description of this tool
-        raise NotImplementedError()
+        return "Search for users in the User Service by name, surname, email, and/or gender."
 
     @property
     def input_schema(self) -> dict[str, Any]:
@@ -24,10 +29,27 @@ class SearchUsersTool(BaseUserServiceTool):
         # - email: str
         # - gender: str
         # None of them are required (see UserClient.search_users method)
-        raise NotImplementedError()
+        return {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The user's name."},
+                "surname": {"type": "string", "description": "The user's surname."},
+                "email": {"type": "string", "description": "The user's email."},
+                "gender": {"type": "string", "description": "The user's gender."},
+            },
+        }
 
     def execute(self, arguments: dict[str, Any]) -> str:
         #TODO:
         # 1. Call user_client search_users (with `**arguments`) and return its results
         # 2. Optional: You can wrap it with `try-except` and return error as string `f"Error while searching users: {str(e)}"`
-        raise NotImplementedError()
+        try:
+            result = self._user_client.search_users(**arguments)
+            if len(result) > self.MAX_RESULT_CHARS:
+                result = (
+                    f"{result[:self.MAX_RESULT_CHARS]}\n"
+                    f"... (truncated, {len(result)} characters total — ask the user to narrow the search)"
+                )
+            return result
+        except Exception as e:
+            return f"Error while searching users: {str(e)}"

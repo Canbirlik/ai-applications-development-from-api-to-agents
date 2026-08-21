@@ -83,7 +83,14 @@ class BaseTool(ABC):
         """
         #TODO:
         # Provide dict with tool configuration in according to OpenAI Spec
-        raise NotImplementedError
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.input_schema,
+            },
+        }
 
     @property
     def anthropic_schema(self) -> dict[str, Any]:
@@ -96,4 +103,8 @@ class BaseTool(ABC):
         """
         #TODO:
         # Provide dict with tool configuration in according to Anthropic Spec
-        raise NotImplementedError
+        return {
+            "name": self.name,
+            "description": self.description,
+            "input_schema": self.input_schema,
+        }
