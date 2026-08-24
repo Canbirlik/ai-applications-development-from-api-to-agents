@@ -33,13 +33,17 @@ class _UMSCreditCardRecognizer(CreditCardRecognizer):
 
     CONTEXT = CreditCardRecognizer.CONTEXT  # inherit parent context words
 
-    def validate_result(self, pattern_text: str) -> None:
+    def validate_result(self, pattern_text: str) -> None:  # type: ignore[override]
         """
         Skip Luhn checksum validation entirely.
 
         The parent's validate_result() runs a Luhn check and sets score → 0.0
         on failure.  UMS generates fake card numbers that never pass Luhn, so
         we return None here to preserve the original pattern score unchanged.
+
+        Note: CreditCardRecognizer narrows this to `-> bool`, but the true root
+        (PatternRecognizer.validate_result) declares `Optional[bool]` and treats
+        `None` as "keep the original score" — exactly the behavior we want here.
         """
         return None
 
@@ -167,11 +171,22 @@ class UMSDataGuardrail:
         # - Create NlpEngineProvider with _NLP_CONFIG, build AnalyzerEngine from it
         # - Register _UMSCreditCardRecognizer and _UMSSalaryRecognizer
         # - Return analyzer
-        raise NotImplementedError()
+        nlp_engine = NlpEngineProvider(nlp_configuration=_NLP_CONFIG).create_engine()
+
+        analyzer = AnalyzerEngine(nlp_engine=nlp_engine)
+        analyzer.registry.add_recognizer(_UMSCreditCardRecognizer())
+        analyzer.registry.add_recognizer(_UMSSalaryRecognizer())
+
+        return analyzer
 
     def redact(self, text: str) -> str:
         """Redact credit card and salary data via Presidio analyze → anonymize pipeline."""
         #TODO:
         # - Analyze text for _ENTITIES; return text unchanged if no results
         # - Anonymize with _OPERATORS, return anonymized.text
-        raise NotImplementedError()
+        results = self.analyzer.analyze(text=text, entities=self._ENTITIES, language="en")
+        if not results:
+            return text
+
+        anonymized = self.anonymizer.anonymize(text=text, analyzer_results=results, operators=self._OPERATORS)  # type: ignore[arg-type]
+        return anonymized.text

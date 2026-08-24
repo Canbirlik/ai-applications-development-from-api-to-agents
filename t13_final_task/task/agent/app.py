@@ -21,6 +21,8 @@ from t13_final_task.task.agent.tools.read_skill_tool import ReadSkillTool
 from t13_final_task.task.agent.ums_agent import UMSAgent
 from t13_final_task.task.agent.models import SkillMetadata, load_skills, Message
 
+from commons.constants import OPENAI_API_KEY
+
 SKILLS_DIR = Path(__file__).parent.parent / "_skills"
 
 
@@ -33,7 +35,22 @@ def _build_available_skills_xml(skills: list[SkillMetadata]) -> str:
     #   - <compatibility> (if present)
     #   - <metadata> with a dynamic child element per key/value pair (if present)
     #   - <allowed-tools> as a space-joined string (if present)
-    raise NotImplementedError()
+    root = ET.Element("available_skills")
+    for skill in skills:
+        el = ET.SubElement(root, "skill", attrib={"name": skill.name})
+        ET.SubElement(el, "description").text = skill.description
+        if skill.license:
+            ET.SubElement(el, "license").text = skill.license
+        if skill.compatibility:
+            ET.SubElement(el, "compatibility").text = skill.compatibility
+        if skill.metadata:
+            meta = ET.SubElement(el, "metadata")
+            for k, v in skill.metadata.items():
+                ET.SubElement(meta, k).text = str(v)
+        if skill.allowed_tools:
+            ET.SubElement(el, "allowed-tools").text = " ".join(skill.allowed_tools)
+    ET.indent(root, space="  ")
+    return ET.tostring(root, encoding="unicode")
 
 
 def build_system_prompt(skills: list[SkillMetadata]) -> str:
@@ -44,7 +61,17 @@ def build_system_prompt(skills: list[SkillMetadata]) -> str:
     #   - Explains how to use skills:
     #       1. Call `read_skill` with path="/<skill-name>/SKILL.md" to load instructions
     #       2. Follow the loaded SKILL.md precisely
-    raise NotImplementedError()
+    return f"""\
+You are an AI assistant with access to agent skills.
+
+{_build_available_skills_xml(skills)}
+
+## How to use skills
+
+When the user's request matches a skill, activate it:
+1. Call `read_skill` with path="/<skill-name>/SKILL.md" to load its full instructions.
+2. Follow the instructions in the loaded SKILL.md precisely.
+"""
 
 
 # Configure logging
@@ -76,14 +103,40 @@ async def lifespan(app: FastAPI):
     # 6. Create redis.Redis client and ping it
     # 7. Create ConversationManager
     #    and assign to global conversation_manager
+    skills = load_skills(SKILLS_DIR)
+    system_prompt = build_system_prompt(skills)
+    logger.info("Loaded %d skill(s): %s", len(skills), [s.name for s in skills])
+
+    tools: list[BaseTool] = [ReadSkillTool(skills_dir=SKILLS_DIR)]
+
+    ums_client = await HttpMcpClient.create("http://localhost:8005/mcp")
+    ums_tools = await ums_client.get_tools()
+    tools.extend(McpTool(ums_client, tool) for tool in ums_tools)
+
+    ddg_client = await StdioMcpClient.create("khshanovskyi/ddg-mcp-server:latest")
+    ddg_tools = await ddg_client.get_tools()
+    tools.extend(McpTool(ddg_client, tool) for tool in ddg_tools)
+
+    ums_agent = UMSAgent(api_key=OPENAI_API_KEY, model="gpt-5.2", tools=tools)
+
+    redis_client = redis.Redis(host="localhost", port=6379)
+    await redis_client.ping()  # type: ignore[misc]
+
+    conversation_manager = ConversationManager(
+        ums_agent=ums_agent,
+        redis_client=redis_client,
+        system_prompt=system_prompt,
+    )
 
     yield
 
     #TODO: shutdown — close redis_client
+    await redis_client.close()
 
 
 app = FastAPI(
     #TODO: add `lifespan` param from above
+    lifespan=lifespan,
 )
 app.add_middleware(
     #TODO:
@@ -93,6 +146,11 @@ app.add_middleware(
     #   - allow_credentials=True
     #   - allow_methods=["*"]
     #   - allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -116,7 +174,7 @@ class ConversationSummary(BaseModel):
 
 
 class CreateConversationRequest(BaseModel):
-    title: str = None
+    title: Optional[str] = None
 
 
 # Endpoints
@@ -140,6 +198,54 @@ async def health():
 #    Supports both streaming and non-streaming modes.
 #    Applies conversation_id and ChatRequest.
 #    If `request.stream` then return `StreamingResponse(result, media_type="text/event-stream")`, otherwise return `ChatResponse(**result)`
+@app.post("/conversations")
+async def create_conversation(request: CreateConversationRequest):
+    assert conversation_manager is not None
+    return await conversation_manager.create_conversation(request.title or "New Conversation")
+
+
+@app.get("/conversations")
+async def list_conversations() -> list[ConversationSummary]:
+    assert conversation_manager is not None
+    conversations = await conversation_manager.list_conversations()
+    return [ConversationSummary(**conversation) for conversation in conversations]
+
+
+@app.get("/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str):
+    assert conversation_manager is not None
+    conversation = await conversation_manager.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail=f"Conversation '{conversation_id}' not found")
+    return conversation
+
+
+@app.delete("/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    assert conversation_manager is not None
+    deleted = await conversation_manager.delete_conversation(conversation_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Conversation '{conversation_id}' not found")
+    return {"message": f"Conversation '{conversation_id}' deleted"}
+
+
+@app.post("/conversations/{conversation_id}/chat")
+async def chat(conversation_id: str, request: ChatRequest):
+    assert conversation_manager is not None
+    try:
+        result = await conversation_manager.chat(
+            user_message=request.message,
+            conversation_id=conversation_id,
+            stream=request.stream,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    if request.stream:
+        return StreamingResponse(result, media_type="text/event-stream")
+
+    assert isinstance(result, dict)
+    return ChatResponse(**result)
 
 
 
@@ -152,4 +258,8 @@ if __name__ == "__main__":
         #  - host="0.0.0.0"
         #  - port=8011
         #  - log_level="debug"
+        app,
+        host="0.0.0.0",
+        port=8011,
+        log_level="debug",
     )

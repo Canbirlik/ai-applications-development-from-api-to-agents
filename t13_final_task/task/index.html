@@ -602,7 +602,9 @@
             // Parse the JSON response body — it returns an array of conversation summary objects,
             // each containing id, title, message_count, created_at, updated_at.
             // Store the result in a local "conversations" variable used by the rendering logic below.
-            const conversations = [];
+            const response = await fetch(API_URL + '/conversations');
+            if (!response.ok) throw new Error('Failed to load conversations');
+            const conversations = await response.json();
 
             conversationsList.innerHTML = '';
 
@@ -670,6 +672,12 @@
             // Parse the JSON response body — it returns the full conversation object including a "messages" array.
             // Set currentConversationId to the given conversationId.
             // Populate conversationHistory from conversation.messages (default to empty array if missing).
+            const response = await fetch(API_URL + '/conversations/' + conversationId);
+            if (!response.ok) throw new Error('Failed to load conversation');
+            const conversation = await response.json();
+
+            currentConversationId = conversationId;
+            conversationHistory = conversation.messages || [];
 
             updateActiveConversation();
             renderMessages();
@@ -782,6 +790,10 @@
             // TODO:
             // Send a DELETE request to API_URL + "/conversations/" + conversationId.
             // If the response is not ok, throw an error.
+            const response = await fetch(API_URL + '/conversations/' + conversationId, {
+                method: 'DELETE'
+            });
+            if (!response.ok) throw new Error('Failed to delete conversation');
 
             if (conversationId === currentConversationId) {
                 currentConversationId = null;
@@ -858,6 +870,18 @@
             // If the response is not ok, throw an error.
             // Parse the JSON response and set currentConversationId from the returned conversation's id.
             // Call loadConversations() to refresh the sidebar.
+            if (!currentConversationId) {
+                const title = userMessage.length > 50 ? userMessage.slice(0, 50) + '...' : userMessage;
+                const createResponse = await fetch(API_URL + '/conversations', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title })
+                });
+                if (!createResponse.ok) throw new Error('Failed to create conversation');
+                const conversation = await createResponse.json();
+                currentConversationId = conversation.id;
+                await loadConversations();
+            }
 
             // TODO (2 — send the chat message):
             // Send a POST request to API_URL + "/conversations/" + currentConversationId + "/chat"
@@ -865,6 +889,12 @@
             //   - message: the usermsg object (role + content)
             //   - stream: true
             // If the response is not ok, throw an error.
+            const response = await fetch(API_URL + '/conversations/' + currentConversationId + '/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: usermsg, stream: true })
+            });
+            if (!response.ok) throw new Error('Failed to send message');
 
             // TODO (3 — read the SSE stream):
             // Obtain a ReadableStream reader from response.body and a TextDecoder.
@@ -914,6 +944,152 @@
             //     assistant message object.
             //   - If no content was ever received, remove the empty assistant message element.
             //   - Call loadConversations() to refresh the sidebar.
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+
+            let assistantMessage = null;
+            let messageBubble = null;
+            let currentChunkContent = '';
+            let hasReceivedContent = false;
+            let everReceivedContent = false;
+            let lastContentTime = Date.now();
+            let pendingToolActivity = [];
+            let liveToolEl = null;
+            let receivedConversationId = false;
+            let currentTypingIndicator = typingIndicator;
+
+            const typingCheckInterval = setInterval(() => {
+                if (hasReceivedContent && currentChunkContent && (Date.now() - lastContentTime > 750) && !currentTypingIndicator) {
+                    conversationHistory.push({ role: 'assistant', content: currentChunkContent });
+                    currentChunkContent = '';
+                    hasReceivedContent = false;
+                    assistantMessage = null;
+                    messageBubble = null;
+                    currentTypingIndicator = addMessage('assistant', '', true);
+                }
+            }, 100);
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunkText = decoder.decode(value, { stream: true });
+                const lines = chunkText.split('\n');
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    const payload = line.slice(6);
+
+                    if (payload === '[DONE]') continue;
+
+                    let parsed;
+                    try {
+                        parsed = JSON.parse(payload);
+                    } catch {
+                        continue;
+                    }
+
+                    if (parsed.conversation_id && !receivedConversationId) {
+                        receivedConversationId = true;
+                        continue;
+                    }
+
+                    if (parsed.error) {
+                        throw new Error(parsed.error);
+                    }
+
+                    if (parsed.tool_activity) {
+                        pendingToolActivity.push(parsed.tool_activity);
+
+                        if (!liveToolEl) {
+                            if (currentTypingIndicator) {
+                                currentTypingIndicator.remove();
+                                currentTypingIndicator = null;
+                            }
+                            liveToolEl = document.createElement('div');
+                            liveToolEl.className = 'message assistant';
+                            liveToolEl.innerHTML = `
+                                <div class="message-bubble tool-calling-bubble">
+                                    <div class="tool-calling-spinner"></div>
+                                    <span class="tool-calling-label"></span>
+                                </div>
+                            `;
+                            messagesContainer.appendChild(liveToolEl);
+                        }
+
+                        const label = liveToolEl.querySelector('.tool-calling-label');
+                        if (parsed.tool_activity.type === 'call') {
+                            label.textContent = `Calling ${parsed.tool_activity.name}...`;
+                        } else if (parsed.tool_activity.type === 'result') {
+                            label.textContent = `${parsed.tool_activity.name} responded`;
+                        }
+
+                        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                        continue;
+                    }
+
+                    if (parsed.choices) {
+                        const delta = (parsed.choices[0] && parsed.choices[0].delta) || {};
+
+                        if (delta.content) {
+                            if (currentTypingIndicator) {
+                                currentTypingIndicator.remove();
+                                currentTypingIndicator = null;
+                            }
+                            if (liveToolEl) {
+                                liveToolEl.remove();
+                                liveToolEl = null;
+                            }
+
+                            if (!assistantMessage) {
+                                assistantMessage = addMessage('assistant', '', false, true);
+                                messageBubble = assistantMessage.querySelector('.message-bubble');
+                            }
+
+                            currentChunkContent += delta.content;
+                            hasReceivedContent = true;
+                            everReceivedContent = true;
+                            lastContentTime = Date.now();
+
+                            messageBubble.innerHTML = marked.parse(currentChunkContent);
+                            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                        } else {
+                            lastContentTime = Date.now();
+                            if (!assistantMessage) {
+                                assistantMessage = addMessage('assistant', '', false, true);
+                                messageBubble = assistantMessage.querySelector('.message-bubble');
+                            }
+                        }
+                    }
+                }
+            }
+
+            clearInterval(typingCheckInterval);
+
+            if (currentTypingIndicator) {
+                currentTypingIndicator.remove();
+            }
+            if (liveToolEl) {
+                liveToolEl.remove();
+            }
+
+            if (pendingToolActivity.length > 0) {
+                const dropdown = createToolHistoryDropdown(pendingToolActivity);
+                if (assistantMessage) {
+                    messagesContainer.insertBefore(dropdown, assistantMessage);
+                } else {
+                    messagesContainer.appendChild(dropdown);
+                }
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+
+            if (currentChunkContent) {
+                conversationHistory.push({ role: 'assistant', content: currentChunkContent });
+            } else if (assistantMessage && !everReceivedContent) {
+                assistantMessage.remove();
+            }
+
+            await loadConversations();
 
         } catch (error) {
             console.error('Error:', error);
