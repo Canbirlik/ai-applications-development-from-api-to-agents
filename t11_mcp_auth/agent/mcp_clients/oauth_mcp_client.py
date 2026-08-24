@@ -36,13 +36,30 @@ class OauthHttpMCPClient(T11MCPClient):
         # 3. Set up `streamable_http_client`, enter it to get streams, create and enter a `ClientSession`,
         #    initialize the session, and print the result as indented JSON
         # 4. Return `self`
-        raise NotImplementedError()
+        await self.token_manager.authenticate()
+
+        headers = await self.token_manager.auth_headers()
+        http_client = httpx.AsyncClient(headers=headers)
+
+        self._streams_context = streamable_http_client(self.mcp_server_url, http_client=http_client)
+        read_stream, write_stream, _ = await self._streams_context.__aenter__()
+
+        self._session_context = ClientSession(read_stream, write_stream)
+        self.session = await self._session_context.__aenter__()
+
+        init_result = await self.session.initialize()
+        print(init_result.model_dump_json(indent=2))
+
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         #TODO:
         # 1. If session context exists — exit it, passing through the exception info
         # 2. If streams context exists — exit it, passing through the exception info
-        raise NotImplementedError()
+        if self._session_context:
+            await self._session_context.__aexit__(exc_type, exc_val, exc_tb)
+        if self._streams_context:
+            await self._streams_context.__aexit__(exc_type, exc_val, exc_tb)
 
     async def get_tools(self) -> list[dict[str, Any]]:
         """Get available tools from MCP server"""
@@ -53,7 +70,18 @@ class OauthHttpMCPClient(T11MCPClient):
         # 1. Fetch available tools from the session
         # 2. Return them as a list of dicts in the OpenAI function-calling format:
         #    {"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}
-        raise NotImplementedError()
+        tools = await self.session.list_tools()
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.inputSchema
+                }
+            }
+            for tool in tools.tools
+        ]
 
     async def call_tool(self, tool_name: str, tool_args: dict[str, Any]) -> Any:
         """
@@ -69,7 +97,11 @@ class OauthHttpMCPClient(T11MCPClient):
         # 1. Check if the token is expired via `self.token_manager.is_token_expired()`
         #    If so, print a refresh message and call `self._reconnect_with_fresh_token()`
         # 2. Return the result of `await self._do_call_tool(tool_name, tool_args)`
-        raise NotImplementedError()
+        if self.token_manager.is_token_expired():
+            print("    🔄 Access token expired, refreshing and reconnecting...")
+            await self._reconnect_with_fresh_token()
+
+        return await self._do_call_tool(tool_name, tool_args)
 
     async def _do_call_tool(self, tool_name: str, tool_args: dict[str, Any]) -> Any:
         #TODO:
@@ -77,7 +109,19 @@ class OauthHttpMCPClient(T11MCPClient):
         # 2. If `tool_result.content` is empty — return `"No content returned from tool"`
         # 3. Get the first element, print it with prefix `"    ⚙️: "`, then return its `.text`
         #    if it's a `TextContent`, otherwise return `str(content)`
-        raise NotImplementedError()
+        assert self.session is not None
+        tool_result: CallToolResult = await self.session.call_tool(tool_name, tool_args)
+
+        if not tool_result.content:
+            return "No content returned from tool"
+
+        content = tool_result.content[0]
+        print(f"    ⚙️: {content}")
+
+        if isinstance(content, TextContent):
+            return content.text
+
+        return str(content)
 
     async def _reconnect_with_fresh_token(self) -> None:
         """Refresh OAuth token and re-establish the MCP session with the new token"""
@@ -87,4 +131,21 @@ class OauthHttpMCPClient(T11MCPClient):
         # 3. Get new auth headers, create a new `httpx.AsyncClient`, set up a new
         #    `streamable_http_client`, enter it, create and enter a new `ClientSession`,
         #    initialize it, then print "    ✅ Reconnected with fresh token"
-        raise NotImplementedError()
+        await self.token_manager.refresh()
+
+        if self._session_context:
+            await self._session_context.__aexit__(None, None, None)
+        if self._streams_context:
+            await self._streams_context.__aexit__(None, None, None)
+
+        headers = await self.token_manager.auth_headers()
+        http_client = httpx.AsyncClient(headers=headers)
+
+        self._streams_context = streamable_http_client(self.mcp_server_url, http_client=http_client)
+        read_stream, write_stream, _ = await self._streams_context.__aenter__()
+
+        self._session_context = ClientSession(read_stream, write_stream)
+        self.session = await self._session_context.__aenter__()
+
+        await self.session.initialize()
+        print("    ✅ Reconnected with fresh token")

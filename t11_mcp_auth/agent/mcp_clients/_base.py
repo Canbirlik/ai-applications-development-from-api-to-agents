@@ -1,5 +1,5 @@
 from abc import abstractmethod, ABC
-from typing import Optional, Any
+from typing import Optional, Any, Self
 
 from mcp import ClientSession
 
@@ -10,7 +10,7 @@ class T11MCPClient(ABC):
         self.session: Optional[ClientSession] = None
 
     @abstractmethod
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
         ...
 
     @abstractmethod
