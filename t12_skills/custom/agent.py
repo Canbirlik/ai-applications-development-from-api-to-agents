@@ -38,7 +38,51 @@ class T12Agent:
         #   - Recursively call _chat_completion and return the result
         # - Optionally log if log_messages, then print the assistant reply with "🤖: " prefix
         # - Return the assistant message
-        raise NotImplementedError()
+        request = {
+            "model": self._model,
+            "messages": [msg.to_dict() for msg in messages],
+            "tools": self._tools_schemas,
+        }
+
+        response = self._client.chat.completions.create(**request)
+        choice = response.choices[0]
+
+        assistant_msg = Message(role=Role.ASSISTANT, content="")
+
+        if choice.message.content:
+            assistant_msg.content = choice.message.content
+
+        if choice.message.tool_calls:
+            assistant_msg.tool_calls = [
+                {
+                    "id": tool_call.id,
+                    "type": tool_call.type,
+                    "function": {
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments,
+                    },
+                }
+                for tool_call in choice.message.tool_calls
+            ]
+
+        if choice.finish_reason == "tool_calls":
+            messages.append(assistant_msg)
+            tool_messages = await self._dispatch_tool_calls(choice.message.tool_calls)
+            messages.extend(tool_messages)
+
+            if log_messages:
+                print("\n--- TOOL RESULTS ---")
+                print(json.dumps([msg.to_dict() for msg in tool_messages], indent=2, default=str))
+
+            return await self._chat_completion(messages, log_messages)
+
+        if log_messages:
+            print("\n--- RESPONSE ---")
+            print(json.dumps(assistant_msg.to_dict(), indent=2, default=str))
+
+        print(f"🤖: {assistant_msg.content}")
+
+        return assistant_msg
 
     async def _dispatch_tool_calls(self, tool_calls) -> list[Message]:
         #TODO:
@@ -49,4 +93,26 @@ class T12Agent:
         #   then take the content from the resulting message
         # - Append a TOOL role Message (with tool_call_id, name, content) for each call
         # - Return the list of tool messages
-        raise NotImplementedError()
+        tool_messages = []
+
+        for tool_call in tool_calls:
+            function_name = tool_call.function.name
+            tool = self._tools.get(function_name)
+
+            if tool is None:
+                content = f"Unknown function: {function_name}"
+            else:
+                arguments = json.loads(tool_call.function.arguments)
+                result_message = await tool.execute(tool_call.id, arguments)
+                content = result_message.content
+
+            tool_messages.append(
+                Message(
+                    role=Role.TOOL,
+                    tool_call_id=tool_call.id,
+                    name=function_name,
+                    content=content,
+                )
+            )
+
+        return tool_messages

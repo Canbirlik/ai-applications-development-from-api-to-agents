@@ -74,7 +74,33 @@ async def main():
     # - Create a T12Agent with an OpenAI client, model "gpt-5.2", and the tools list
     # - Run a chat loop: read user input, break on "exit",
     #   append USER message, call agent.chat_completion, append the returned assistant message
-    raise NotImplementedError()
+    messages = [Message(role=Role.SYSTEM, content=system_prompt)]
+
+    py_interpreter_tool = await PythonCodeInterpreterTool.create(MCP_URL, MCP_TOOL_NAME, SKILLS_DIR)
+    tools: list[BaseTool] = [
+        ReadSkillTool(SKILLS_DIR),
+        py_interpreter_tool,
+    ]
+
+    agent = T12Agent(
+        client=OpenAI(api_key=OPENAI_API_KEY),
+        model="gpt-5.2",
+        tools=tools,
+    )
+
+    try:
+        while True:
+            user_input = input("\n> ").strip()
+
+            if user_input.lower() == "exit":
+                break
+
+            messages.append(Message(role=Role.USER, content=user_input))
+
+            ai_message = await agent.chat_completion(messages)
+            messages.append(ai_message)
+    finally:
+        await py_interpreter_tool.close()
 
 
 if __name__ == "__main__":

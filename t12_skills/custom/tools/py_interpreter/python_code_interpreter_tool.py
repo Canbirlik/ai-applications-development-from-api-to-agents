@@ -24,7 +24,14 @@ class PythonCodeInterpreterTool(BaseTool):
         #TODO:
         # - Iterate over mcp_tool_models and assign the one matching tool_name to self._code_execute_tool
         # - If not found, raise ValueError listing the available tool names
-        raise NotImplementedError()
+        for tool in mcp_tool_models:
+            if tool.name == tool_name:
+                self._code_execute_tool = tool
+                break
+
+        if self._code_execute_tool is None:
+            available = ", ".join(tool.name for tool in mcp_tool_models)
+            raise ValueError(f"Tool '{tool_name}' not found. Available tools: {available}")
 
     @classmethod
     async def create(
@@ -38,17 +45,21 @@ class PythonCodeInterpreterTool(BaseTool):
         # - Create a T12MCPClient by connecting to mcp_url (use T12MCPClient.create)
         # - Fetch the available tools from the MCP client
         # - Instantiate and return cls with the client, tools, tool_name, and skills_dir
-        raise NotImplementedError()
+        mcp_client = await T12MCPClient.create(mcp_url)
+        mcp_tool_models = await mcp_client.get_tools()
+        return cls(mcp_client, mcp_tool_models, tool_name, skills_dir)
 
     @property
     def name(self) -> str:
         #TODO: Return the tool name from self._code_execute_tool
-        raise NotImplementedError()
+        assert self._code_execute_tool is not None
+        return self._code_execute_tool.name
 
     @property
     def description(self) -> str:
         #TODO: Return the tool description from self._code_execute_tool
-        raise NotImplementedError()
+        assert self._code_execute_tool is not None
+        return self._code_execute_tool.description
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -57,7 +68,19 @@ class PythonCodeInterpreterTool(BaseTool):
         # - Add an extra optional string property "script_path" describing that the tool
         #   will prepend the file content to the code before execution
         # - Return the extended parameters dict
-        raise NotImplementedError()
+        assert self._code_execute_tool is not None
+        parameters = {**self._code_execute_tool.parameters}
+        properties = {**parameters.get("properties", {})}
+        properties["script_path"] = {
+            "type": "string",
+            "description": (
+                "Optional path to a skill file (relative to the skills directory, e.g. "
+                "'/unit-converter/scripts/convert.py'). Its content is prepended to `code` "
+                "before execution."
+            ),
+        }
+        parameters["properties"] = properties
+        return parameters
 
     async def _execute(self, arguments: dict[str, Any]) -> str:
         #TODO:
@@ -70,4 +93,22 @@ class PythonCodeInterpreterTool(BaseTool):
         # - Call self._mcp_client.call_tool with the tool name and args
         # - Parse the returned content into _ExecutionResult using model_validate_json
         # - Return the result serialized as JSON using model_dump_json
-        raise NotImplementedError()
+        script_path = arguments.get("script_path")
+
+        if script_path:
+            full_path = self._skills_dir / script_path.lstrip("/")
+            script_content = get_file_content(full_path)
+            args = {
+                "code": script_content + "\n\n" + arguments["code"],
+                "session_id": arguments.get("session_id", ""),
+            }
+        else:
+            args = arguments
+
+        result = await self._mcp_client.call_tool(self.name, args)
+        execution_result = _ExecutionResult.model_validate_json(result)
+        return execution_result.model_dump_json()
+
+    async def close(self) -> None:
+        """Close the underlying MCP connection."""
+        await self._mcp_client.close()

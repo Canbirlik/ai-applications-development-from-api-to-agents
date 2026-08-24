@@ -24,7 +24,16 @@ def get_or_create_skill(skill_name: str, skill_dir: Path, client: OpenAI):
     # - List existing skills and return the ID if one with matching name already exists
     # - Otherwise zip the skill directory using zip_skill()
     # - Upload the zip as a new skill and return its ID
-    raise NotImplementedError()
+    skills = client.skills.list()
+    for skill in skills:
+        if skill.name == skill_name:
+            print(f"Found existing skill '{skill.name}' (id={skill.id})")
+            return skill.id
+
+    zip_bytes = zip_skill(skill_dir)
+    created_skill = client.skills.create(files=(f"{skill_name}.zip", zip_bytes, "application/zip"))
+    print(f"Created new skill '{created_skill.name}' (id={created_skill.id})")
+    return created_skill.id
 
 
 def chat(client: OpenAI, skill_id: str, log_request: bool = True, log_response: bool = True):
@@ -46,7 +55,31 @@ def chat(client: OpenAI, skill_id: str, log_request: bool = True, log_response: 
         # - Update previous_response_id from the response
         # - If log_response is True, print the full response as indented JSON;
         #   otherwise print response.output_text
-        raise NotImplementedError()
+        environment = {
+            "type": "container_auto",
+            "skills": [{"type": "skill_reference", "skill_id": skill_id}],
+        }
+
+        request_payload = {
+            "model": "gpt-5.2",
+            "input": [{"role": "user", "content": user_input}],
+            "tools": [{"type": "shell", "environment": environment}],
+        }
+
+        if previous_response_id:
+            request_payload["previous_response_id"] = previous_response_id
+
+        if log_request:
+            print(json.dumps(request_payload, indent=2))
+
+        response = client.responses.create(**request_payload)
+
+        previous_response_id = response.id
+
+        if log_response:
+            print(response.model_dump_json(indent=2))
+        else:
+            print(response.output_text)
 
 
 
@@ -54,7 +87,10 @@ def delete_skills(client: OpenAI):
     #TODO:
     # - List all uploaded skills
     # - Delete each one and print its name as confirmation
-    raise NotImplementedError()
+    skills = client.skills.list()
+    for skill in skills:
+        client.skills.delete(skill.id)
+        print(f"Deleted skill '{skill.name}' (id={skill.id})")
 
 
 STYLE_SKILL_NAME= "style-guide"
@@ -69,7 +105,14 @@ def main():
     # - Call get_or_create_skill (choose CALCULATOR or STYLE skill dir/name to test)
     # - Call chat with the client and skill_id
     # - Call delete_skills to clean up after the session
-    raise NotImplementedError()
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    skill_id = get_or_create_skill(STYLE_SKILL_NAME, STYLE_SKILL_DIR, client)
+
+    try:
+        chat(client, skill_id)
+    finally:
+        delete_skills(client)
 
 
 if __name__ == "__main__":
